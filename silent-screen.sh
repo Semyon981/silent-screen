@@ -12,10 +12,13 @@
 # capture was taken. Failures go to stderr only (invisible when key-bound).
 #
 # Usage:
-#   silent-screen.sh              full main display
-#   silent-screen.sh -i           interactive selection (drag a region)
-#   silent-screen.sh -w           click a window to capture it
-#   silent-screen.sh --chats      list chats that messaged the bot (id, type, name)
+#   silent-screen.sh                     full main display
+#   silent-screen.sh -i                  interactive selection (drag a region)
+#   silent-screen.sh -w                  click a window to capture it
+#   silent-screen.sh --chats             list chats that messaged the bot
+#   silent-screen.sh --set KEY=VALUE ..  write config keys (creates the file)
+#   silent-screen.sh --edit              open the config in $EDITOR
+#   silent-screen.sh --config            print the config path
 
 set -euo pipefail
 
@@ -27,7 +30,35 @@ die() {
 	exit 1
 }
 
-[[ -r "$CONFIG" ]] || die "no config at $CONFIG"
+# Upsert KEY=VALUE lines, preserving the rest. Values are written verbatim, so
+# slashes and colons in a proxy URL need no escaping (no sed involved).
+config_set() {
+	[[ $# -gt 0 ]] || die "usage: silent-screen --set KEY=VALUE [KEY=VALUE ...]"
+	mkdir -p "$(dirname "$CONFIG")"
+	(umask 177; touch "$CONFIG")
+	for pair in "$@"; do
+		[[ "$pair" == *=* ]] || die "expected KEY=VALUE, got: $pair"
+		local key=${pair%%=*}
+		[[ -n "$key" ]] || die "empty key in: $pair"
+		local tmp; tmp="$(mktemp)"
+		grep -vE "^[[:space:]]*${key}=" "$CONFIG" > "$tmp" 2>/dev/null || true
+		printf '%s\n' "$pair" >> "$tmp"
+		mv "$tmp" "$CONFIG"
+	done
+	chmod 600 "$CONFIG"
+	echo "updated $CONFIG"
+}
+
+# Config-editing subcommands: usable before a complete config exists, so they
+# run ahead of the readability check below.
+case "${1:-}" in
+	--set)    shift; config_set "$@"; exit 0 ;;
+	--edit)   mkdir -p "$(dirname "$CONFIG")"; (umask 177; touch "$CONFIG")
+	          exec "${EDITOR:-vi}" "$CONFIG" ;;
+	--config) echo "$CONFIG"; exit 0 ;;
+esac
+
+[[ -r "$CONFIG" ]] || die "no config at $CONFIG — create it with: silent-screen --set TG_BOT_TOKEN=... TG_CHAT_ID=..."
 # shellcheck source=/dev/null
 source "$CONFIG"
 : "${TG_BOT_TOKEN:?TG_BOT_TOKEN missing in config}"
@@ -38,7 +69,7 @@ curl_opts=(-sS --connect-timeout 10 --max-time 60)
 [[ -n "${TG_PROXY:-}" ]] && curl_opts+=(--proxy "$TG_PROXY")
 
 if [[ "${1:-}" == "--chats" ]]; then
-	command -v jq >/dev/null 2>&1 || die "jq not found — rerun install.sh, or: brew install jq"
+	command -v jq >/dev/null 2>&1 || die "jq not found — rerun install.sh to fetch it"
 	# Have the user message the bot first — getUpdates is empty until then.
 	updates="$(curl "${curl_opts[@]}" "${api}/getUpdates")"
 	# One row per distinct chat:  id  type  @username  name.
