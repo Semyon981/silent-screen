@@ -34,7 +34,18 @@ else
 	echo "installed  $dest (downloaded)"
 fi
 
-# 2. Scaffold the config once. TG_PROXY is left as a placeholder — fill in the
+# 2. Ensure jq — silent-screen --chats parses Telegram's JSON with it.
+if command -v jq >/dev/null 2>&1; then
+	echo "jq         ok"
+elif command -v brew >/dev/null 2>&1; then
+	echo "jq         installing via brew…"
+	brew install jq
+else
+	echo "jq         MISSING and no Homebrew found — install brew (https://brew.sh)" >&2
+	echo "           then: brew install jq   (only needed for --chats)" >&2
+fi
+
+# 3. Scaffold the config once. TG_PROXY is left as a placeholder — fill in the
 #    real relay line by hand so credentials never live in the repo or this script.
 if [[ -e "$config" ]]; then
 	echo "kept       $config (already exists)"
@@ -48,10 +59,10 @@ TG_CHAT_ID=
 # Optional relay for networks that block api.telegram.org:
 # TG_PROXY=socks5h://user:pass@host:1080
 EOF
-	echo "created    $config (fill in TG_BOT_TOKEN, then run: silent-screen --chat-id)"
+	echo "created    $config (fill in TG_BOT_TOKEN, then run: silent-screen --chats)"
 fi
 
-# 3. Make sure ~/.local/bin is on PATH; wire it into the login shell if not.
+# 4. Make sure ~/.local/bin is on PATH; wire it into the login shell if not.
 case ":$PATH:" in
 	*":$bin_dir:"*) echo "PATH       ok ($bin_dir already on PATH)" ;;
 	*)
@@ -73,5 +84,5 @@ esac
 echo
 echo "next:"
 echo "  1. put your BotFather token in $config"
-echo "  2. message your bot in Telegram, then: silent-screen --chat-id"
+echo "  2. message your bot in Telegram, then: silent-screen --chats"
 echo "  3. copy the printed id into TG_CHAT_ID, then: silent-screen"

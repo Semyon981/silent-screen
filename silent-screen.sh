@@ -38,43 +38,27 @@ curl_opts=(-sS --connect-timeout 10 --max-time 60)
 [[ -n "${TG_PROXY:-}" ]] && curl_opts+=(--proxy "$TG_PROXY")
 
 if [[ "${1:-}" == "--chats" ]]; then
+	command -v jq >/dev/null 2>&1 || die "jq not found — rerun install.sh, or: brew install jq"
 	# Have the user message the bot first — getUpdates is empty until then.
 	updates="$(curl "${curl_opts[@]}" "${api}/getUpdates")"
-	if command -v python3 >/dev/null 2>&1; then
-		# Proper JSON parse: one line per chat as  id  type  @username  name.
-		printf '%s' "$updates" | python3 -c '
-import sys, json
-try:
-    data = json.load(sys.stdin)
-except ValueError:
-    sys.exit("could not parse Telegram response")
-if not data.get("ok"):
-    sys.exit("telegram: " + str(data.get("description", "getUpdates failed")))
-chats = {}
-for upd in data.get("result", []):
-    msg = (upd.get("message") or upd.get("edited_message")
-           or upd.get("channel_post") or {})
-    chat = msg.get("chat")
-    if not chat:
-        continue
-    name = chat.get("title") or " ".join(
-        p for p in (chat.get("first_name"), chat.get("last_name")) if p)
-    uname = "@" + chat["username"] if chat.get("username") else "-"
-    chats[chat["id"]] = (chat.get("type", "?"), uname, name or "-")
-for cid, (ctype, uname, name) in chats.items():
-    print(f"{cid}\t{ctype}\t{uname}\t{name}")
-if not chats:
-    sys.exit("no chats yet — message the bot in Telegram first")
-'
-	else
-		# Fallback without python3: ids only, no names.
-		echo "python3 not found — showing ids only" >&2
-		printf '%s' "$updates" |
-			tr ',' '\n' |
-			grep -o '"id":-\{0,1\}[0-9]\{1,\}' |
-			grep -o '\-\{0,1\}[0-9]\{1,\}' |
-			sort -u
-	fi
+	# One row per distinct chat:  id  type  @username  name.
+	rows="$(
+		printf '%s' "$updates" | jq -r '
+			if .ok == false then error(.description // "getUpdates failed") else . end
+			| [ .result[]?
+			    | (.message // .edited_message // .channel_post // {}).chat
+			    | select(. != null) ]
+			| unique_by(.id)[]
+			| [ (.id | tostring),
+			    (.type // "?"),
+			    (if .username then "@" + .username else "-" end),
+			    ((.title // ([.first_name, .last_name] | map(select(.)) | join(" ")))
+			     | if . == "" then "-" else . end)
+			  ] | @tsv
+		'
+	)" || die "could not parse Telegram response"
+	[[ -n "$rows" ]] || die "no chats yet — message the bot in Telegram first"
+	printf '%s\n' "$rows"
 	exit 0
 fi
 
