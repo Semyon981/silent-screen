@@ -15,7 +15,7 @@
 #   silent-screen.sh              full main display
 #   silent-screen.sh -i           interactive selection (drag a region)
 #   silent-screen.sh -w           click a window to capture it
-#   silent-screen.sh --chat-id    print chat ids that messaged the bot
+#   silent-screen.sh --chats      list chats that messaged the bot (id, type, name)
 
 set -euo pipefail
 
@@ -37,16 +37,48 @@ api="${TG_API:-https://api.telegram.org}/bot${TG_BOT_TOKEN}"
 curl_opts=(-sS --connect-timeout 10 --max-time 60)
 [[ -n "${TG_PROXY:-}" ]] && curl_opts+=(--proxy "$TG_PROXY")
 
-if [[ "${1:-}" == "--chat-id" ]]; then
-	# Have the user send /start to the bot first, then run this.
-	curl "${curl_opts[@]}" "${api}/getUpdates" |
-		tr ',' '\n' |
-		grep -o '"id":-\{0,1\}[0-9]\{1,\}' |
-		sort -u
+if [[ "${1:-}" == "--chats" ]]; then
+	# Have the user message the bot first — getUpdates is empty until then.
+	updates="$(curl "${curl_opts[@]}" "${api}/getUpdates")"
+	if command -v python3 >/dev/null 2>&1; then
+		# Proper JSON parse: one line per chat as  id  type  @username  name.
+		printf '%s' "$updates" | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit("could not parse Telegram response")
+if not data.get("ok"):
+    sys.exit("telegram: " + str(data.get("description", "getUpdates failed")))
+chats = {}
+for upd in data.get("result", []):
+    msg = (upd.get("message") or upd.get("edited_message")
+           or upd.get("channel_post") or {})
+    chat = msg.get("chat")
+    if not chat:
+        continue
+    name = chat.get("title") or " ".join(
+        p for p in (chat.get("first_name"), chat.get("last_name")) if p)
+    uname = "@" + chat["username"] if chat.get("username") else "-"
+    chats[chat["id"]] = (chat.get("type", "?"), uname, name or "-")
+for cid, (ctype, uname, name) in chats.items():
+    print(f"{cid}\t{ctype}\t{uname}\t{name}")
+if not chats:
+    sys.exit("no chats yet — message the bot in Telegram first")
+'
+	else
+		# Fallback without python3: ids only, no names.
+		echo "python3 not found — showing ids only" >&2
+		printf '%s' "$updates" |
+			tr ',' '\n' |
+			grep -o '"id":-\{0,1\}[0-9]\{1,\}' |
+			grep -o '\-\{0,1\}[0-9]\{1,\}' |
+			sort -u
+	fi
 	exit 0
 fi
 
-: "${TG_CHAT_ID:?TG_CHAT_ID missing in config — run --chat-id to find it}"
+: "${TG_CHAT_ID:?TG_CHAT_ID missing in config — run --chats to find it}"
 
 # screencapture flags: -x silences the shutter sound, -o drops window shadows.
 capture_flags=(-x -o)
