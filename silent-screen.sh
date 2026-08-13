@@ -6,6 +6,10 @@
 #   TG_CHAT_ID=987654321
 #   TG_PROXY=socks5h://127.0.0.1:1080   # optional, for throttled networks
 #   TG_API=https://api.telegram.org     # optional, override for a relay
+#   TG_SEND_AS=photo                    # optional: photo (default) | document
+#
+# Runs silently: no sound, no on-screen notification, nothing that reveals a
+# capture was taken. Failures go to stderr only (invisible when key-bound).
 #
 # Usage:
 #   silent-screen.sh              full main display
@@ -17,13 +21,9 @@ set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/silent-screen/config"
 
-notify() {
-	osascript -e "display notification \"$1\" with title \"silent-screen\"" >/dev/null 2>&1 || true
-}
-
 die() {
+	# stderr only — a GUI notification would defeat the point of the tool.
 	printf 'silent-screen: %s\n' "$1" >&2
-	notify "$1"
 	exit 1
 }
 
@@ -69,24 +69,28 @@ screencapture "${capture_flags[@]}" "$shot"
 
 name="$(date +%Y-%m-%d_%H.%M.%S).png"
 
-# sendDocument, not sendPhoto: sendPhoto re-encodes to JPEG and smears text.
+# photo: shows inline in the chat, but Telegram re-encodes it to JPEG (text gets
+# a little soft). document: sent as-is, lossless PNG, appears as an attachment.
+case "${TG_SEND_AS:-photo}" in
+	photo)    method=sendPhoto;    field=photo    ;;
+	document) method=sendDocument; field=document ;;
+	*)        die "TG_SEND_AS must be photo or document, got: $TG_SEND_AS" ;;
+esac
+
 # Retried because throttled networks drop the upload mid-flight rather than refuse it.
 response=""
 for delay in 0 3 9; do
 	[[ "$delay" != 0 ]] && sleep "$delay"
 	response="$(
-		curl "${curl_opts[@]}" -X POST "${api}/sendDocument" \
+		curl "${curl_opts[@]}" -X POST "${api}/${method}" \
 			-F "chat_id=${TG_CHAT_ID}" \
 			-F "disable_notification=true" \
-			-F "document=@${shot};type=image/png;filename=${name}" || true
+			-F "${field}=@${shot};type=image/png;filename=${name}" || true
 	)"
 	[[ "$response" == *'"ok":true'* ]] && break
 done
 
-if [[ "$response" == *'"ok":true'* ]]; then
-	notify "sent"
-	exit 0
-fi
+[[ "$response" == *'"ok":true'* ]] && exit 0
 
 # Do not throw the capture away just because the network did.
 spool="$HOME/Pictures/silent-screen-unsent"
