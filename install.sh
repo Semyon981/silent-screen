@@ -4,19 +4,33 @@
 # existing config, so your token and proxy line survive a reinstall.
 set -euo pipefail
 
-src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-src="$src_dir/silent-screen.sh"
-[[ -f "$src" ]] || { echo "install: silent-screen.sh not found next to this script" >&2; exit 1; }
+raw_base="https://raw.githubusercontent.com/Semyon981/silent-screen/master"
 
 bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
 dest="$bin_dir/silent-screen"          # dropped .sh: it becomes a command name
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/silent-screen"
 config="$config_dir/config"
 
-# 1. Install the executable.
+# 1. Install the executable. Prefer a checkout beside this script (dev flow);
+#    fall back to downloading from GitHub so `curl … | bash` works standalone.
 mkdir -p "$bin_dir"
-install -m 755 "$src" "$dest"
-echo "installed  $dest"
+# BASH_SOURCE is unset when piped from stdin (curl | bash); :- keeps set -u quiet.
+src_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
+src="$src_dir/silent-screen.sh"
+if [[ -n "$src_dir" && -f "$src" ]]; then
+	install -m 755 "$src" "$dest"
+	echo "installed  $dest (from local checkout)"
+else
+	tmp="$(mktemp)"
+	trap 'rm -f "$tmp"' EXIT
+	curl -fsSL "$raw_base/silent-screen.sh" -o "$tmp" \
+		|| { echo "install: failed to download silent-screen.sh from $raw_base" >&2; exit 1; }
+	# Guard against a truncated download landing in PATH as a runnable command.
+	head -1 "$tmp" | grep -q '^#!/bin/bash' \
+		|| { echo "install: downloaded file is not the expected script" >&2; exit 1; }
+	install -m 755 "$tmp" "$dest"
+	echo "installed  $dest (downloaded)"
+fi
 
 # 2. Scaffold the config once. TG_PROXY is left as a placeholder — fill in the
 #    real relay line by hand so credentials never live in the repo or this script.
