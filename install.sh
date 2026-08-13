@@ -81,6 +81,7 @@ else
 	cat > "$config" <<'EOF'
 # silent-screen config. Keep this file 600.
 TG_BOT_TOKEN=
+# One or more recipients, comma- or space-separated: 987654321,-1001234567890
 TG_CHAT_ID=
 # Optional relay for networks that block api.telegram.org:
 # TG_PROXY=socks5h://user:pass@host:1080

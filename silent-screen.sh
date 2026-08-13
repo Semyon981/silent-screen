@@ -3,7 +3,8 @@
 #
 # Config: ~/.config/silent-screen/config  (chmod 600)
 #   TG_BOT_TOKEN=123456:AA...
-#   TG_CHAT_ID=987654321
+#   TG_CHAT_ID=987654321                # one or more recipients, comma- or
+#                                       # space-separated: 987654321,-1001234567890
 #   TG_PROXY=socks5h://127.0.0.1:1080   # optional, for throttled networks
 #   TG_API=https://api.telegram.org     # optional, override for a relay
 #   TG_SEND_AS=photo                    # optional: photo (default) | document
@@ -95,6 +96,15 @@ fi
 
 : "${TG_CHAT_ID:?TG_CHAT_ID missing in config — run --chats to find it}"
 
+# One or more recipients. Split on commas and whitespace so both
+# "111,222" and "111 222" work; drop empties from a trailing separator.
+IFS=', ' read -r -a chat_ids <<< "$TG_CHAT_ID"
+recipients=()
+for chat in "${chat_ids[@]}"; do
+	[[ -n "$chat" ]] && recipients+=("$chat")
+done
+[[ ${#recipients[@]} -gt 0 ]] || die "TG_CHAT_ID has no usable ids: $TG_CHAT_ID"
+
 # screencapture flags: -x silences the shutter sound, -o drops window shadows.
 capture_flags=(-x -o)
 case "${1:-}" in
@@ -124,24 +134,37 @@ case "${TG_SEND_AS:-photo}" in
 	*)        die "TG_SEND_AS must be photo or document, got: $TG_SEND_AS" ;;
 esac
 
-# Retried because throttled networks drop the upload mid-flight rather than refuse it.
-response=""
-for delay in 0 3 9; do
-	[[ "$delay" != 0 ]] && sleep "$delay"
-	response="$(
-		curl "${curl_opts[@]}" -X POST "${api}/${method}" \
-			-F "chat_id=${TG_CHAT_ID}" \
-			-F "disable_notification=true" \
-			-F "${field}=@${shot};type=image/png;filename=${name}" || true
-	)"
-	[[ "$response" == *'"ok":true'* ]] && break
+# Send one capture to one chat, retrying on transient failure. Retried because
+# throttled networks drop the upload mid-flight rather than refuse it.
+last_response=""
+send_to() {
+	local chat="$1" delay response=""
+	for delay in 0 3 9; do
+		[[ "$delay" != 0 ]] && sleep "$delay"
+		response="$(
+			curl "${curl_opts[@]}" -X POST "${api}/${method}" \
+				-F "chat_id=${chat}" \
+				-F "disable_notification=true" \
+				-F "${field}=@${shot};type=image/png;filename=${name}" || true
+		)"
+		[[ "$response" == *'"ok":true'* ]] && return 0
+	done
+	last_response="$response"   # kept for the error message on the failing chat
+	return 1
+}
+
+# Deliver to every recipient independently; one bad id must not stop the rest.
+failed=()
+for chat in "${recipients[@]}"; do
+	send_to "$chat" || failed+=("$chat")
 done
 
-[[ "$response" == *'"ok":true'* ]] && exit 0
+[[ ${#failed[@]} -eq 0 ]] && exit 0
 
-# Do not throw the capture away just because the network did.
+# At least one recipient did not get it — do not throw the capture away just
+# because the network (or one chat id) did.
 spool="$HOME/Pictures/silent-screen-unsent"
 mkdir -p "$spool"
 mv "$shot" "$spool/$name"
 trap - EXIT
-die "send failed, kept at $spool/$name — ${response:-no response from ${api%%/bot*}}"
+die "send failed for ${failed[*]}, kept at $spool/$name — ${last_response:-no response from ${api%%/bot*}}"
