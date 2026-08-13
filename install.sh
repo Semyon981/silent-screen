@@ -11,13 +11,15 @@ dest="$bin_dir/silent-screen"          # dropped .sh: it becomes a command name
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/silent-screen"
 config="$config_dir/config"
 
-# 1. Install the executable. Prefer a checkout beside this script (dev flow);
-#    fall back to downloading from GitHub so `curl … | bash` works standalone.
+# 1. Install the executable, always overwriting any previous copy. Use a checkout
+#    beside this script only when we were actually run from a file; when piped
+#    (curl | bash) BASH_SOURCE is empty, and we must download rather than pick up
+#    whatever stale silent-screen.sh happens to sit in the current directory.
 mkdir -p "$bin_dir"
-# BASH_SOURCE is unset when piped from stdin (curl | bash); :- keeps set -u quiet.
-src_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
-src="$src_dir/silent-screen.sh"
-if [[ -n "$src_dir" && -f "$src" ]]; then
+self="${BASH_SOURCE[0]:-}"       # empty when piped from stdin
+src=""
+[[ -n "$self" ]] && src="$(cd "$(dirname "$self")" && pwd)/silent-screen.sh"
+if [[ -n "$src" && -f "$src" ]]; then
 	install -m 755 "$src" "$dest"
 	echo "installed  $dest (from local checkout)"
 else
